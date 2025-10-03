@@ -12,6 +12,7 @@ By using Rinkhals, you will keep all stock Anycubic features (print screen, Anyc
 - Mainsail, Fluidd (with Moonraker)
 - USB camera support in Mainsail, Fluidd
 - Prints from Orca will show the print screen
+- Experimental MMU Ace integration to prepare Anycubic's multi-material unit workflows
 - SSH access for customization (user: **root**, password: **rockchip**)
 - OTA Rinkhals updates
 - [Apps system](https://github.com/jbatonnet/Rinkhals.apps) (OctoEverywhere, Cloudflare, Tailscale, ...)

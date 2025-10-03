@@ -70,7 +70,13 @@ else:
 
 @dataclass
 class ActiveFilamentStatus:
-    empty: str
+    empty: str = ""
+    unit: int = -1
+    gate: int = -1
+    tool: int = -1
+    name: str = "Unknown"
+    material: str = "Unknown"
+    status: str = "idle"
 
 @dataclass
 class MmuEncoderStatus:
@@ -180,6 +186,9 @@ class MmuAceGate:
     speed_override: int = -1
     rfid: int = 1 # 1 = no rfid 2 = rfid, if rfid = 2 not update possible
     source: int = -1
+    sku: str | None = None
+    brand: str | None = None
+    status_text: str | None = None
 
 class MmuAceUnit:
     id: int
@@ -192,6 +201,7 @@ class MmuAceUnit:
     def __init__(self, id: int, name: str):
         self.id = id
         self.name = name
+        self.dryer = {}
         self.gates = [
             MmuAceGate(),
             MmuAceGate(),
@@ -207,6 +217,7 @@ class MmuAceTool:
     temp: int = -1
     name: str = "Unknown"
     in_use: bool = False
+    gate_index: int = TOOL_GATE_UNKNOWN
 
 class MmuAcePrintState(Enum):
     UNKNOWN = 'unknown'
@@ -275,13 +286,14 @@ class MmuAce:
     filament: MmuAceFilament = MmuAceFilament()
     endless_spool_groups: List[int] = []
     action: str = ACTION_IDLE
+    active_filament: ActiveFilamentStatus = ActiveFilamentStatus()
 
     def __init__(self):
-        self.units = [
-            MmuAceUnit(0, "ACE 1")
-        ]
-
+        self.units = []
         self.tools = []
+        self.ttg_map = []
+        self.filament = MmuAceFilament()
+        self.active_filament = ActiveFilamentStatus()
 
 class PrinterController:
     async def send_request(self, method: str, params: Dict[str, Any], default: Any = Sentinel.MISSING) -> Any:
@@ -393,7 +405,9 @@ class RemotePrinterController(PrinterController):
     ) -> Union[_T, Dict[str, Any]]:
         raise NotImplementedError("Remote printer does not support subscriptions")
 
-def rgb_to_rgba(rgb: List[int]) -> List[int]:
+def rgb_to_rgba(rgb: List[int] | None) -> List[int] | None:
+    if rgb is None:
+        return None
     return [rgb[0], rgb[1], rgb[2], 255]
 
 def rgba_to_hex(rgba: List[int]) -> str:
@@ -403,7 +417,13 @@ def hex_to_rgb(hex: str) -> List[int]:
     return [int(hex[i:i+2], 16) for i in (0, 2, 4)]
 
 def hex_to_rgba(hex: str) -> List[int]:
-    return [int(hex[i:i+2], 16) for i in (0, 2, 4, 6)]
+    if hex.startswith('#'):
+        hex = hex[1:]
+    if len(hex) == 6:
+        return [int(hex[i:i+2], 16) for i in (0, 2, 4)] + [255]
+    if len(hex) == 8:
+        return [int(hex[i:i+2], 16) for i in (0, 2, 4, 6)]
+    raise ValueError(f"Unsupported color format: {hex}")
 
 class MmuAceController:
     ace: MmuAce
@@ -419,6 +439,112 @@ class MmuAceController:
             self.printer = KlippyPrinterController(self.server)
         else:
             self.printer = RemotePrinterController(self.server, host)
+
+    def _map_slot_status(self, status: Optional[str]) -> int:
+        if status is None:
+            return GATE_UNKNOWN
+        normalized = status.lower()
+        if normalized in {"ready", "preload", "shifting"}:
+            return GATE_AVAILABLE
+        if normalized in {"buffer", "buffer_ready"}:
+            return GATE_AVAILABLE_FROM_BUFFER
+        if normalized in {"empty", "runout"}:
+            return GATE_EMPTY
+        return GATE_UNKNOWN
+
+    def _build_gate_from_slot(self, slot: Dict[str, Any], default_index: int) -> MmuAceGate:
+        gate = MmuAceGate()
+        gate.index = slot.get("index", default_index)
+        gate.status_text = slot.get("status")
+        gate.status = self._map_slot_status(gate.status_text)
+        gate.sku = slot.get("sku")
+        gate.brand = slot.get("brand")
+        material = slot.get("type") or gate.material
+        gate.material = material
+        name = slot.get("name") or gate.sku or material or gate.filament_name
+        gate.filament_name = name
+        color = slot.get("color")
+        gate.color = rgb_to_rgba(color if isinstance(color, list) else None)
+        gate.temperature = slot.get("temp", gate.temperature)
+        gate.spool_id = slot.get("spool_id", gate.spool_id)
+        gate.speed_override = slot.get("speed_override", gate.speed_override)
+        gate.rfid = slot.get("rfid", gate.rfid)
+        gate.source = slot.get("source", gate.source)
+        return gate
+
+    def _iter_gates(self):
+        for unit in self.ace.units:
+            for gate in unit.gates:
+                yield unit, gate
+
+    def _find_gate_by_index(self, gate_index: int) -> tuple[MmuAceUnit | None, MmuAceGate | None]:
+        for unit, gate in self._iter_gates():
+            if gate.index == gate_index:
+                return unit, gate
+        return None, None
+
+    def _find_gate_by_position(self, position: int) -> tuple[MmuAceUnit | None, MmuAceGate | None]:
+        current = position
+        for unit in self.ace.units:
+            if current < len(unit.gates):
+                return unit, unit.gates[current]
+            current -= len(unit.gates)
+        return None, None
+
+    def _resolve_gate(self, gate_index: int) -> tuple[MmuAceUnit | None, MmuAceGate | None]:
+        unit, gate = self._find_gate_by_index(gate_index)
+        if gate is not None:
+            return unit, gate
+        return self._find_gate_by_position(gate_index)
+
+    def _update_active_filament(self, filament_hub: Dict[str, Any]):
+        current = filament_hub.get("current_filament")
+        active = ActiveFilamentStatus()
+        if isinstance(current, dict):
+            active.unit = current.get("id", UNIT_UNKNOWN)
+            active.gate = current.get("index", TOOL_GATE_UNKNOWN)
+            active.tool = current.get("tool", TOOL_GATE_UNKNOWN)
+            active.name = current.get("name") or current.get("sku") or current.get("type") or active.name
+            active.material = current.get("type") or active.material
+            active.status = current.get("status") or active.status
+            active.empty = "0"
+            position = current.get("position")
+            if position is not None:
+                self.ace.filament.position = position
+            filament_pos = current.get("pos")
+            if filament_pos is not None:
+                self.ace.filament.pos = filament_pos
+            direction = current.get("direction")
+            if direction is not None:
+                self.ace.filament.direction = direction
+        elif isinstance(current, str) and current:
+            active.name = current
+            active.empty = "0"
+        else:
+            active.empty = "1"
+
+        self.ace.active_filament = active
+
+        if active.name:
+            self.ace.filament.name = active.name
+        if active.unit != UNIT_UNKNOWN:
+            self.ace.unit = active.unit
+        if active.gate != TOOL_GATE_UNKNOWN:
+            self.ace.gate = active.gate
+        if active.tool != TOOL_GATE_UNKNOWN:
+            self.ace.tool = active.tool
+
+    def _update_tool_usage(self):
+        active_gate = self.ace.gate
+        for tool in self.ace.tools:
+            tool.in_use = tool.gate_index == active_gate
+
+    def _request_succeeded(self, result: Any) -> bool:
+        if result in ("ok", None):
+            return True
+        if isinstance(result, dict) and not result:
+            return True
+        return False
 
     def _handle_status_update(self):
         self.server.send_event("mmu_ace:status_update", asdict(self.get_status()))
@@ -476,52 +602,88 @@ class MmuAceController:
 
             self._set_ace_status(filament_hub)
 
-    def _set_ace_status(self, filament_hub):
-        # set units
+    def _set_ace_status(self, filament_hub: Dict[str, Any]):
         ace = self.ace
+
+        enabled = filament_hub.get("enabled")
+        if enabled is not None:
+            ace.enabled = bool(enabled)
+
+        ace.action = filament_hub.get("action", ace.action or ACTION_IDLE)
+        ace.operation = filament_hub.get("operation", ace.operation)
+
+        print_state = filament_hub.get("print_state")
+        if isinstance(print_state, str):
+            try:
+                ace.print_state = MmuAcePrintState(print_state)
+            except ValueError:
+                logging.debug(f"Unknown print_state reported by ACE: {print_state}")
+
+        is_paused = filament_hub.get("is_paused")
+        if is_paused is not None:
+            ace.is_paused = bool(is_paused)
+
+        is_homed = filament_hub.get("is_homed")
+        if is_homed is not None:
+            ace.is_homed = bool(is_homed)
+
+        unit_value = filament_hub.get("unit")
+        if unit_value is not None:
+            ace.unit = unit_value
+
+        gate_value = filament_hub.get("gate")
+        if gate_value is not None:
+            ace.gate = gate_value
+
+        tool_value = filament_hub.get("tool")
+        if tool_value is not None:
+            ace.tool = tool_value
+
+        endless_spool_groups = filament_hub.get("endless_spool_groups")
+        if isinstance(endless_spool_groups, list):
+            ace.endless_spool_groups = endless_spool_groups
+
+        ace.num_toolchanges = filament_hub.get("num_toolchanges", ace.num_toolchanges)
+        ace.last_tool = filament_hub.get("last_tool", ace.last_tool)
+        ace.next_tool = filament_hub.get("next_tool", ace.next_tool)
+
+        self._update_active_filament(filament_hub)
+
         ace.units = []
         ace.tools = []
         ace.ttg_map = []
 
-        for hub in filament_hub["filament_hubs"]:
-            hub_id = hub["id"]
+        slot_counter = 0
+        for hub in filament_hub.get("filament_hubs", []):
+            hub_id = hub.get("id", len(ace.units))
             unit = MmuAceUnit(hub_id, f"ACE {hub_id + 1}")
 
-            unit.status = hub["status"] if "status" in hub else None
-            unit.temp = hub["temp"] if "temp" in hub else None
-
-            if "dryer_status" in hub:
-                unit.dryer = hub["dryer_status"]
-
+            unit.status = hub.get("status")
+            unit.temp = hub.get("temp")
+            unit.dryer = hub.get("dryer_status", {}) or {}
             unit.gates = []
-            for i, slot in enumerate(hub["slots"]):
-                index: int = slot["index"] if "index" in slot else None
-                # preload ready shifting runout empty
-                status: str = slot["status"] if "status" in slot else None
-                sku: str = slot["sku"] if "sku" in slot else None
-                type: str = slot["type"] if "type" in slot else None
-                color: list[int] = slot["color"] if "color" in slot else None
-                rfid: int = slot["rfid"] if "rfid" in slot else None
-                source: int = slot["source"] if "source" in slot else None
 
-                gate = MmuAceGate()
-                gate.index = index
-                gate.material = type
-                gate.filament_name = type
-                gate.color = rgb_to_rgba(color)
-                gate.rfid = rfid
-                gate.source = source
-                gate.status = GATE_AVAILABLE if status == "ready" else GATE_EMPTY if status == "empty" or status == "runout" else GATE_UNKNOWN
-
+            for slot in hub.get("slots", []):
+                gate = self._build_gate_from_slot(slot, slot_counter)
                 unit.gates.append(gate)
 
                 tool = MmuAceTool()
-                tool.name = f"T{i + 1}"
-                self.ace.tools.append(tool)
-                self.ace.ttg_map.append(i)
+                tool_index = len(ace.tools)
+                tool.name = slot.get("name") or gate.filament_name or f"T{tool_index + 1}"
+                tool.material = gate.material
+                tool.temp = gate.temperature
+                tool.gate_index = gate.index if gate.index is not None else slot_counter
+                ace.tools.append(tool)
+                ace.ttg_map.append(tool.gate_index)
 
-            self.ace.units.append(unit)
+                slot_counter += 1
 
+            ace.units.append(unit)
+
+        if not ace.ttg_map:
+            ace.ttg_map = [i for i in range(len(ace.tools))]
+
+        self._update_tool_usage()
         self._handle_status_update()
 
     def get_status(self) -> MmuAceStatus:
@@ -547,7 +709,7 @@ class MmuAceController:
                 unit = self.ace.unit,
                 gate = self.ace.gate,
                 tool = self.ace.tool,
-                active_filament = None,
+                active_filament = self.ace.active_filament,
                 num_toolchanges = self.ace.num_toolchanges,
                 last_tool = self.ace.last_tool,
                 next_tool = self.ace.next_tool,
@@ -621,6 +783,10 @@ class MmuAceController:
 
     def update_ttg_map(self, ttg_map: List[int]):
         self.ace.ttg_map = ttg_map
+        for index, gate_index in enumerate(ttg_map):
+            if index < len(self.ace.tools):
+                self.ace.tools[index].gate_index = gate_index
+        self._update_tool_usage()
         self._handle_status_update()
 
     async def update_gate(self,
@@ -631,63 +797,139 @@ class MmuAceController:
                           color: list[int] = None,
                           temperature: int = -1,
                           spool_id: int = -1,
-                          speed_override: int = -1
+                          speed_override: int = -1,
+                          sku: str | None = None,
+                          brand: str | None = None,
+                          source: int | None = None
                           ):
-        gate: MmuAceGate | None = None
-        unit: MmuAceUnit | None = None
-        current_gate_index = gate_index
-        for u in self.ace.units:
-            num_gates = len(u.gates)
-            if num_gates - 1 >= gate_index:
-                unit = u
-                gate = u.gates[current_gate_index]
-                break
-            current_gate_index = current_gate_index - num_gates
+        unit, gate = self._resolve_gate(gate_index)
+
+        if gate is None or unit is None:
+            logging.warning(f"update gate {gate_index} not found")
+            return
 
         logging.warning(f"update gate {gate_index} actual values {json.dumps(gate.__dict__)}")
 
-        if color is None:
-            color = [0, 0, 0, 0]
+        if gate.rfid == 2:
+            logging.warning(f"update gate {gate_index} not allowed, rfid is set")
+            return
 
-        if gate is not None:
-            if gate.rfid == 2:
-                logging.warning(f"update gate {gate_index} not allowed, rfid is set")
-                return
-            
-            logging.warning(f"updating gate {gate_index} with values {json.dumps(gate.__dict__)}")
-            # {"method":"filament_hub/set_filament_info","params":{"color":{"B":65,"G":209,"R":254},"id":0,"index":2,"type":"PLA"},"id":34}
-            # call gklib to update spool
-            params = {
-                "color": {"R": color[0], "G": color[1], "B": color[2]},
-                "id": unit.id, # ace id
-                "index": gate.index, # slot index
-                "type": material
-            }
-            
-            error = "unknown"
-            result = None
-            try:
-                result = await self.printer.send_request("filament_hub/set_filament_info", params)
-            except Exception as e:
-                logging.error(f"Error contacting klippy: {e}")
-                result = "error"
-                error = e
+        if gate.index is None:
+            logging.warning(f"update gate {gate_index} missing physical index, aborting update")
+            return
 
-            # gate.status = status
-            # gate.filament_name = filament_name
-            # gate.material = material
-            # gate.color = color
-            # gate.temperature = temperature
-            # gate.spool_id = spool_id
-            # gate.speed_override = speed_override
-            # self._handle_status_update()
+        rgba_color = color or gate.color or [0, 0, 0, 255]
 
-            if result == "ok":
-                logging.warning(f"updated gate {gate_index} with values {json.dumps(gate.__dict__)}")
-            else:
-                logging.warning(f"update gate {gate_index} failed: {result} {error}")
-        else:
-            logging.warning(f"update gate {gate_index} not found")
+        params = {
+            "color": {"R": rgba_color[0], "G": rgba_color[1], "B": rgba_color[2]},
+            "id": unit.id,
+            "index": gate.index,
+            "type": material
+        }
+
+        error = "unknown"
+        result = None
+        try:
+            result = await self.printer.send_request("filament_hub/set_filament_info", params)
+        except Exception as e:
+            logging.error(f"Error contacting klippy: {e}")
+            result = "error"
+            error = e
+
+        if not self._request_succeeded(result):
+            logging.warning(f"update gate {gate_index} failed: {result} {error}")
+            return
+
+        if status is not None:
+            gate.status = status
+        gate.filament_name = filament_name
+        gate.material = material
+        gate.color = rgba_color
+        gate.temperature = temperature
+        gate.spool_id = spool_id
+        gate.speed_override = speed_override
+        if sku is not None:
+            gate.sku = sku
+        if brand is not None:
+            gate.brand = brand
+        if source is not None:
+            gate.source = source
+
+        logging.warning(f"updated gate {gate_index} with values {json.dumps(gate.__dict__)}")
+
+        for tool in self.ace.tools:
+            if tool.gate_index in {gate.index, gate_index}:
+                tool.material = material
+                tool.temp = temperature
+                tool.name = filament_name
+
+        if self.ace.gate in {gate.index, gate_index}:
+            self.ace.filament.name = filament_name
+            self.ace.active_filament.name = filament_name
+            self.ace.active_filament.material = material
+
+        self._update_tool_usage()
+        self._handle_status_update()
+
+    async def start_dryer(self, unit_id: int, *, temp: int, duration: int, fan_speed: int = 0):
+        params = {
+            "id": unit_id,
+            "temp": temp,
+            "duration": duration,
+            "fan_speed": fan_speed
+        }
+
+        error = None
+        result = None
+        try:
+            result = await self.printer.send_request("filament_hub/start_drying", params)
+        except Exception as exc:
+            logging.error(f"Error starting dryer for unit {unit_id}: {exc}")
+            result = "error"
+            error = exc
+
+        if not self._request_succeeded(result):
+            logging.warning(f"start dryer for unit {unit_id} failed: {result} {error}")
+            return
+
+        unit = next((u for u in self.ace.units if u.id == unit_id), None)
+        if unit is not None:
+            unit.dryer = unit.dryer or {}
+            unit.dryer.update({
+                "status": "running",
+                "target_temp": temp,
+                "duration": duration,
+                "fan_speed": fan_speed,
+                "remain_time": unit.dryer.get("remain_time", duration)
+            })
+
+        self._handle_status_update()
+
+    async def stop_dryer(self, unit_id: int):
+        params = {"id": unit_id}
+
+        error = None
+        result = None
+        try:
+            result = await self.printer.send_request("filament_hub/stop_drying", params)
+        except Exception as exc:
+            logging.error(f"Error stopping dryer for unit {unit_id}: {exc}")
+            result = "error"
+            error = exc
+
+        if not self._request_succeeded(result):
+            logging.warning(f"stop dryer for unit {unit_id} failed: {result} {error}")
+            return
+
+        unit = next((u for u in self.ace.units if u.id == unit_id), None)
+        if unit is not None:
+            unit.dryer = unit.dryer or {}
+            unit.dryer.update({
+                "status": "stop",
+                "remain_time": 0
+            })
+
+        self._handle_status_update()
 
 class MmuAcePatcher:
 
@@ -717,6 +959,7 @@ class MmuAcePatcher:
         self.register_gcode_handler("MMU_ENDLESS_SPOOL", self._on_gcode_mmu_endless_spool) # todo
         self.register_gcode_handler("MMU_SELECT", self._on_gcode_mmu_unknown) # todo
         self.register_gcode_handler("MMU_SLICER_TOOL_MAP", self._on_gcode_mmu_unknown) # todo
+        self.register_gcode_handler("MMU_DRYER", self._on_gcode_mmu_dryer)
 
         self.kobra.register_status_patcher(self.patch_status)
 
@@ -757,6 +1000,21 @@ class MmuAcePatcher:
         logging.warning(f"handle _on_gcode_mmu_endless_spool groups_str: {groups_str}")
         # TODO
 
+    async def _on_gcode_mmu_dryer(self, args: dict[str, str | None], delegate):
+        logging.warning(f"handle mmu_dryer: {json.dumps(args)}")
+        action = self._get_gcode_arg_str("ACTION", args).upper()
+        unit = int(self._get_gcode_arg_str("UNIT", args))
+
+        if action == "START":
+            temp = int(self._get_gcode_arg_str("TEMP", args))
+            duration = int(self._get_gcode_arg_str("DURATION", args))
+            fan_speed = int(self._get_gcode_arg_str_def("FAN", args, "0"))
+            await self.ace_controller.start_dryer(unit, temp=temp, duration=duration, fan_speed=fan_speed)
+        elif action == "STOP":
+            await self.ace_controller.stop_dryer(unit)
+        else:
+            raise ValueError(f"Unknown MMU_DRYER ACTION '{action}'")
+
     # Triggered on spool edit in ui
     async def _on_gcode_mmu_gate_map(self, args: dict[str, str | None], delegate):
         logging.warning(f"handle mmu_gate_map: {json.dumps(args)}")
@@ -770,15 +1028,28 @@ class MmuAcePatcher:
 
             logging.warning(f"try update gate {key}: {json.dumps(value)}")
 
+            gate_status = value.get("status")
+            if isinstance(gate_status, str):
+                try:
+                    gate_status = int(gate_status)
+                except ValueError:
+                    gate_status = GATE_UNKNOWN
+
+            color_hex = value.get("color")
+            color_rgba = hex_to_rgba(color_hex) if color_hex else None
+
             await self.ace_controller.update_gate(
                 gate_index = gate_index,
-                status = value["status"],
+                status = gate_status,
                 filament_name = value["name"],
                 material = value["material"],
-                color = hex_to_rgba(value["color"]),
+                color = color_rgba,
                 temperature = value["temp"],
                 spool_id = value["spool_id"],
                 speed_override = value["speed_override"],
+                sku = value.get("sku"),
+                brand = value.get("brand"),
+                source = value.get("source")
             )
 
     def reinit(self):
@@ -828,14 +1099,16 @@ class MmuAcePatcher:
             mapping = []
 
             for tool_index, tool in enumerate(self.ace.tools):
-                gate_index = self.ace.ttg_map[tool_index]
-                # todo : implement multi units and check if gate_index is valid
-                gate = self.ace.units[0].gates[gate_index]
+                gate_index = self.ace.ttg_map[tool_index] if tool_index < len(self.ace.ttg_map) else TOOL_GATE_UNKNOWN
+                _, gate = self._resolve_gate(gate_index)
+                if gate is None:
+                    logging.warning(f"mmu_ace: unable to resolve gate for tool {tool_index} (gate_index={gate_index})")
+                    continue
 
                 mapping.append({
                     "paint_index": tool_index,
                     "ams_index": gate_index,
-                    "paint_color": gate.color, # todo
+                    "paint_color": gate.color,
                     "ams_color": gate.color,
                     "material_type": gate.material
                 })

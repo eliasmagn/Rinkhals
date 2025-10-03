@@ -12,7 +12,7 @@ By using Rinkhals, you will keep all stock Anycubic features (print screen, Anyc
 - Mainsail, Fluidd (with Moonraker)
 - USB camera support in Mainsail, Fluidd
 - Prints from Orca will show the print screen
-- Experimental MMU Ace integration to prepare Anycubic's multi-material unit workflows
+- Experimental MMU Ace integration to prepare Anycubic's multi-material unit workflows, now mirroring live spool status, supporting multiple ACE hubs, and exposing dryer controls
 - SSH access for customization (user: **root**, password: **rockchip**)
 - OTA Rinkhals updates
 - [Apps system](https://github.com/jbatonnet/Rinkhals.apps) (OctoEverywhere, Cloudflare, Tailscale, ...)
@@ -83,6 +83,16 @@ This UI allows you to manage installed apps, trigger an OTA update, reboot your 
     <img width="192" src="./docs/docs/assets/rinkhals-ui/ui-updates.png">
     <!-- <img width="192" src="./.github/images/screenshot-rinkhals-advanced.png"> -->
 </p>
+
+## MMU Ace enhancements
+
+Rinkhals' experimental MMU Ace component now keeps Moonraker in sync with Anycubic's firmware so multi-material workflows feel native:
+
+- Real-time status updates mirror slot availability, colors, and the active filament across one or two ACE hubs.
+- Editing a spool in the UI updates the underlying firmware (`filament_hub/set_filament_info`) so slicer metadata and tool-to-gate maps stay aligned.
+- A new `MMU_DRYER` bridge command proxies dryer start/stop calls, giving front-ends a simple way to manage ACE drying cycles without touching raw IPC.
+
+See the [firmware docs](./docs/docs/firmware/mmu-ace.md) for the GCode contract and API calls that power these features.
 
 ## Rinkhals Installer
 

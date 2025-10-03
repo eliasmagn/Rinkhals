@@ -5,8 +5,12 @@
 - [x] Wire MMU-specific hooks into `kobra.py` (GCode interception, status/print patchers)
 - [x] Update Moonraker launch scripts to deploy the new component and preserve existing debug tools
 - [x] Resolve configuration merge conflicts by keeping webcam support while enabling MMU Ace
+- [x] Mirror ACE telemetry into Moonraker events so UI clients receive live slot and dryer updates
+- [x] Allow spool metadata edits (color, material, name) to flow back to the firmware through `MMU_GATE_MAP`
+- [x] Add dryer control plumbing and documentation via the new `MMU_DRYER` bridge command
+- [x] Support multiple ACE hubs when building tool/gate maps and slicer metadata
 
 ## Follow-up Tasks
-- [ ] Document MMU Ace usage and limitations in the docs site
-- [ ] Validate MMU Ace behavior on KS1 hardware (new bed mesh script paths)
-- [ ] Expose MMU status telemetry in the UI once upstream support lands
+- [ ] Validate dual-hub and dryer flows on physical hardware (KS1 + combo)
+- [ ] Coordinate with UI projects to surface the richer MMU Ace status payload
+- [ ] Extend docs with troubleshooting guidance once field feedback arrives

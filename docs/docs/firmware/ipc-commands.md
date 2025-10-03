@@ -65,6 +65,9 @@ response:
 {"id":33,"result":{}}\\x03
 ```
 
+> [!NOTE]
+> The `id` field identifies the ACE hub (0 for the first unit, 1 for the second, ...). Moonraker's `MMU_DRYER` GCode bridge now forwards these parameters so UIs can trigger dryer cycles without issuing raw IPC.
+
 ### stop drying
 
 ```json
@@ -77,10 +80,15 @@ response:
 {"id":34,"result":{}}\\x03
 ```
 
+> [!TIP]
+> Use `MMU_DRYER ACTION=STOP UNIT=<id>` from the Moonraker bridge to call this endpoint from UI code.
+
 ### set filament info
 ```json
 {"method":"filament_hub/set_filament_info","params":{"color":{"B":65,"G":209,"R":254},"id":0,"index":2,"type":"PLA"},"id":34}\\x03
 ```
+
+The Rinkhals MMU Ace component translates spool edits (`MMU_GATE_MAP`) into these requests so Moonraker, the firmware, and the UI share the same color/material metadata.
 
 ### get filament info
 

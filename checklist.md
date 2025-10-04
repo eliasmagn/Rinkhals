@@ -1,6 +1,7 @@
 # Development Checklist
 
 ## Recently Completed
+- [x] Publish firmware documentation overview with links to boot flow, partition, and update analyses
 - [x] Merge Moonraker MMU Ace component into the app package
 - [x] Wire MMU-specific hooks into `kobra.py` (GCode interception, status/print patchers)
 - [x] Update Moonraker launch scripts to deploy the new component and preserve existing debug tools

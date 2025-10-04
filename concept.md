@@ -11,3 +11,5 @@ Recent work also closes the loop on tool selection. The bridge now understands b
 With slicer integration tightening, Rinkhals now consumes `MMU_SLICER_TOOL_MAP` payloads from OrcaSlicer/PrusaSlicer whether they emit comma-separated pairs or JSON blobs. Parsed tool names, materials, temperatures, and gate assignments immediately refresh the in-memory model and status event so Moonraker-side previews always mirror the slicer's intent.
 
 To keep the experience trustworthy while new integrations land, we hardened diagnostics that watch for printer-side overrides. Comment-only `printer.custom.cfg` files are now ignored so the UI surfaces warnings only when real tweaks exist, and the new regression test (`pytest files/3-rinkhals/tests/test_ui_diagnostics.py`) makes sure future refactors preserve that signal-to-noise ratio.
+
+The accompanying documentation now features a firmware overview hub that stitches together the boot flow, partitioning strategy, and update pathways. Capturing those guardrails in one place supports the concept's balance between stock reliability and community-driven experimentation.

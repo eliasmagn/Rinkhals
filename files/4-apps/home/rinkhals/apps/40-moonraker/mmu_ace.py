@@ -789,6 +789,40 @@ class MmuAceController:
         self._update_tool_usage()
         self._handle_status_update()
 
+    def update_slicer_tool_map(self, entries: List[Dict[str, Any]]):
+        if not entries:
+            return
+
+        max_tool_index = max(entry["tool"] for entry in entries)
+
+        while len(self.ace.tools) <= max_tool_index:
+            self.ace.tools.append(MmuAceTool())
+
+        while len(self.ace.ttg_map) <= max_tool_index:
+            self.ace.ttg_map.append(TOOL_GATE_UNKNOWN)
+
+        for entry in entries:
+            tool_index = entry["tool"]
+            tool = self.ace.tools[tool_index]
+
+            name = entry.get("name")
+            if name not in (None, ""):
+                tool.name = str(name)
+
+            material = entry.get("material")
+            if material not in (None, ""):
+                tool.material = str(material)
+
+            temp_value = entry.get("temp")
+            if temp_value not in (None, ""):
+                tool.temp = int(temp_value)
+
+        ttg_map = list(self.ace.ttg_map)
+        for entry in entries:
+            ttg_map[entry["tool"]] = entry["gate"]
+
+        self.update_ttg_map(ttg_map)
+
     async def select_tool(self,
                           *,
                           tool: int | None = None,
@@ -1024,7 +1058,7 @@ class MmuAcePatcher:
         self.register_gcode_handler("MMU_TTG_MAP", self._on_gcode_mmu_ttg_map)
         self.register_gcode_handler("MMU_ENDLESS_SPOOL", self._on_gcode_mmu_endless_spool) # todo
         self.register_gcode_handler("MMU_SELECT", self._on_gcode_mmu_select)
-        self.register_gcode_handler("MMU_SLICER_TOOL_MAP", self._on_gcode_mmu_unknown) # todo
+        self.register_gcode_handler("MMU_SLICER_TOOL_MAP", self._on_gcode_mmu_slicer_tool_map)
         self.register_gcode_handler("MMU_DRYER", self._on_gcode_mmu_dryer)
 
         self.kobra.register_status_patcher(self.patch_status)
@@ -1061,6 +1095,131 @@ class MmuAcePatcher:
             return int(value)
         except (TypeError, ValueError) as exc:
             raise ValueError(f"MMU_SELECT {name} must be an integer") from exc
+
+    def _parse_tool_index(self, value: Any) -> int:
+        if isinstance(value, int):
+            index = value
+        else:
+            text = str(value).strip()
+            if not text:
+                raise ValueError("Tool index cannot be empty")
+            if text[0] in {"t", "T"}:
+                text = text[1:]
+            index = int(text)
+        if index < 0:
+            raise ValueError(f"Tool index must be non-negative, got {value}")
+        return index
+
+    def _parse_int(self, value: Any, label: str) -> int:
+        text = str(value).strip()
+        if not text:
+            raise ValueError(f"{label} cannot be empty")
+        try:
+            return int(text)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Invalid {label} '{value}'") from exc
+
+    def _normalize_slicer_tool_map_entries(self, entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        normalized: List[Dict[str, Any]] = []
+        for entry in entries:
+            tool_value = entry.get("tool")
+            if tool_value is None and "index" in entry:
+                tool_value = entry["index"]
+            if tool_value is None:
+                raise ValueError("MMU_SLICER_TOOL_MAP entry missing tool index")
+            tool_index = self._parse_tool_index(tool_value)
+
+            gate_value: Any | None = entry.get("gate")
+            if gate_value is None:
+                for alias in ("slot", "gate_index"):
+                    if alias in entry:
+                        gate_value = entry[alias]
+                        break
+            if gate_value is None:
+                raise ValueError(f"MMU_SLICER_TOOL_MAP entry missing gate for tool {tool_index}")
+            gate_index = self._parse_int(gate_value, "gate index")
+
+            normalized_entry: Dict[str, Any] = {"tool": tool_index, "gate": gate_index}
+
+            name = entry.get("name")
+            if name not in (None, ""):
+                normalized_entry["name"] = str(name)
+
+            material = entry.get("material") or entry.get("filament")
+            if material not in (None, ""):
+                normalized_entry["material"] = str(material)
+
+            temp_value = entry.get("temp", entry.get("temperature"))
+            if temp_value not in (None, ""):
+                normalized_entry["temp"] = self._parse_int(temp_value, "temperature")
+
+            normalized.append(normalized_entry)
+
+        if not normalized:
+            raise ValueError("MMU_SLICER_TOOL_MAP requires at least one tool entry")
+
+        return normalized
+
+    def _parse_slicer_tool_map_json(self, payload: Any) -> List[Dict[str, Any]]:
+        if isinstance(payload, dict):
+            if "tools" in payload:
+                payload = payload["tools"]
+            else:
+                entries: List[Dict[str, Any]] = []
+                for key, value in payload.items():
+                    if key == "tools" and isinstance(value, list):
+                        entries.extend(value)
+                        continue
+                    entry: Dict[str, Any]
+                    if isinstance(value, dict):
+                        entry = dict(value)
+                    else:
+                        entry = {"gate": value}
+                    entry.setdefault("tool", key)
+                    entries.append(entry)
+                payload = entries
+
+        if isinstance(payload, list):
+            entries = []
+            for item in payload:
+                if isinstance(item, dict):
+                    entries.append(dict(item))
+                elif isinstance(item, (list, tuple)):
+                    if len(item) < 2:
+                        raise ValueError("Invalid MMU_SLICER_TOOL_MAP tuple entry")
+                    entries.append({"tool": item[0], "gate": item[1]})
+                else:
+                    raise ValueError("Unsupported MMU_SLICER_TOOL_MAP entry type")
+            return self._normalize_slicer_tool_map_entries(entries)
+
+        raise ValueError("Unsupported MMU_SLICER_TOOL_MAP JSON payload")
+
+    def _parse_slicer_tool_map(self, map_value: str | None) -> List[Dict[str, Any]]:
+        if map_value is None:
+            raise ValueError("MMU_SLICER_TOOL_MAP requires MAP argument")
+
+        raw_value = map_value.strip()
+        if not raw_value:
+            raise ValueError("MMU_SLICER_TOOL_MAP requires MAP data")
+
+        try:
+            payload = json.loads(raw_value)
+        except json.JSONDecodeError:
+            entries = []
+            for part in raw_value.split(','):
+                token = part.strip()
+                if not token:
+                    continue
+                if ':' not in token:
+                    raise ValueError(f"Invalid MMU_SLICER_TOOL_MAP segment '{token}'")
+                tool_token, gate_token = token.split(':', 1)
+                entries.append({
+                    "tool": self._parse_tool_index(tool_token),
+                    "gate": self._parse_int(gate_token, "gate index")
+                })
+            return self._normalize_slicer_tool_map_entries(entries)
+
+        return self._parse_slicer_tool_map_json(payload)
 
     async def _on_gcode_mmu_select(self, args: dict[str, str | None], delegate):
         logging.warning(f"handle mmu_select: {json.dumps(args)}")
@@ -1108,6 +1267,12 @@ class MmuAcePatcher:
         ttg_map_str = self._get_gcode_arg_str("MAP", args)
         ttg_map = [int(value) for value in ttg_map_str.split(",")]
         self.ace_controller.update_ttg_map(ttg_map)
+
+    async def _on_gcode_mmu_slicer_tool_map(self, args: dict[str, str | None], delegate):
+        logging.warning(f"handle mmu_slicer_tool_map: {json.dumps(args)}")
+        map_value = self._get_gcode_arg_str("MAP", args)
+        entries = self._parse_slicer_tool_map(map_value)
+        self.ace_controller.update_slicer_tool_map(entries)
 
     # Triggered on ToolToGate edit in ui
     async def _on_gcode_mmu_endless_spool(self, args: dict[str, str | None], delegate):

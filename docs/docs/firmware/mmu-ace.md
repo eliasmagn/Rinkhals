@@ -45,6 +45,16 @@ The bridge forwards the material and color to `filament_hub/set_filament_info` a
 
 Maps tool indexes to gate indexes. The bridge updates the slicer metadata block (`ams_settings`) so OrcaSlicer/PrusaSlicer color previews match the physical slots.
 
+### `MMU_SLICER_TOOL_MAP`
+
+Lets supported slicers push their tool metadata (name, material, temp, and gate assignment) into Moonraker ahead of a print. The `MAP` argument accepts either comma-separated `tool:gate` pairs (`0:0,1:4`) or JSON payloads such as:
+
+```
+MMU_SLICER_TOOL_MAP MAP={"tools":[{"tool":0,"gate":2,"name":"PLA","material":"PLA","temp":210},{"index":1,"slot":3,"material":"PETG","temperature":240}]}
+```
+
+The bridge normalizes both formats, updates the in-memory tool list, refreshes `ttg_map`, and emits a status event so UI clients immediately reflect the slicer's mapping.
+
 ### `MMU_DRYER`
 
 Provides dryer control without direct IPC calls.

@@ -567,7 +567,11 @@ class Diagnostic:
                 with open(custom_cfg_path, 'r') as f:
                     custom_lines = f.readlines()
             
-                custom_lines = [ l for l in custom_lines if custom_lines.strip() and not custom_lines.strip().startswith('#') ]
+                custom_lines = [
+                    l
+                    for l in custom_lines
+                    if l.strip() and not l.strip().startswith('#')
+                ]
                 if len(custom_lines) > 0:
                     yield Diagnostic(
                         type=DiagnosticType.WARNING,

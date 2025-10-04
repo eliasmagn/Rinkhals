@@ -12,6 +12,7 @@
 - [x] Support multiple ACE hubs when building tool/gate maps and slicer metadata
 - [x] Normalize `MMU_SELECT` arguments from UI and firmware, proxy them to `filament_hub/select_tool`, and refresh Moonraker state with tests
 - [x] Parse `MMU_SLICER_TOOL_MAP` payloads from supported slicers (JSON and comma-separated) and update Moonraker tool metadata in lockstep
+- [x] Fix `printer.custom.cfg` diagnostics so comment-only files no longer warn and add regression coverage via `pytest files/3-rinkhals/tests/test_ui_diagnostics.py`
 
 ## Follow-up Tasks
 - [ ] Validate dual-hub and dryer flows on physical hardware (KS1 + combo)

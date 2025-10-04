@@ -75,6 +75,8 @@ After installation, Rinkhals provides a touch UI accessible from the printer scr
 
 This UI allows you to manage installed apps, trigger an OTA update, reboot your printer and much more. This will allow you to customize your experience and keep the printer memory as low as needed based on your needs.
 
+Recent maintenance hardened the diagnostics surfaced in this UI: comment-only `printer.custom.cfg` overlays are now ignored so customization warnings appear only when a real tweak exists, and the new pytest regression test (`pytest files/3-rinkhals/tests/test_ui_diagnostics.py`) ensures future updates keep that filter intact.
+
 <p align="center">
     <!-- <img width="192" src="./.github/images/screenshot-settings.png"> -->
     <img width="192" src="./docs/docs/assets/rinkhals-ui/ui-main.png">

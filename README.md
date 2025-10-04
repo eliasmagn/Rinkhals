@@ -90,6 +90,7 @@ Rinkhals' experimental MMU Ace component now keeps Moonraker in sync with Anycub
 
 - Real-time status updates mirror slot availability, colors, and the active filament across one or two ACE hubs.
 - Editing a spool in the UI updates the underlying firmware (`filament_hub/set_filament_info`) so slicer metadata and tool-to-gate maps stay aligned.
+- Supported slicers stream tool-map updates through `MMU_SLICER_TOOL_MAP`; the bridge now parses both JSON and comma-separated payloads so Moonraker reflects the latest tool metadata instantly.
 - A new `MMU_DRYER` bridge command proxies dryer start/stop calls, giving front-ends a simple way to manage ACE drying cycles without touching raw IPC.
 - `MMU_SELECT` now accepts either Fluidd's `TOOL` argument or Anycubic firmware `UNIT`/`GATE` pairs, forwards them to `filament_hub/select_tool`, and immediately re-syncs Moonraker's selection state.
 

@@ -789,6 +789,25 @@ class MmuAceController:
         self._update_tool_usage()
         self._handle_status_update()
 
+    async def update_endless_spool_groups(self, groups: List[int]):
+        params = {"groups": groups}
+
+        error = None
+        result = None
+        try:
+            result = await self.printer.send_request("filament_hub/set_endless_spool_groups", params)
+        except Exception as exc:
+            logging.error(f"Error updating endless spool groups: {exc}")
+            result = "error"
+            error = exc
+
+        if not self._request_succeeded(result):
+            logging.warning(f"update endless spool groups failed: {result} {error}")
+            return
+
+        self.ace.endless_spool_groups = list(groups)
+        self._handle_status_update()
+
     async def update_gate(self,
                           gate_index: int,
                           status: int = GATE_EMPTY,
@@ -998,7 +1017,36 @@ class MmuAcePatcher:
         logging.warning(f"handle _on_gcode_mmu_endless_spool: {json.dumps(args)}")
         groups_str = self._get_gcode_arg_str("GROUPS", args)
         logging.warning(f"handle _on_gcode_mmu_endless_spool groups_str: {groups_str}")
-        # TODO
+
+        if groups_str is None:
+            raise ValueError("MMU_ENDLESS_SPOOL requires GROUPS data")
+
+        try:
+            parsed_groups = ast.literal_eval(groups_str)
+        except (ValueError, SyntaxError):
+            parsed_groups = groups_str
+
+        if isinstance(parsed_groups, (list, tuple)):
+            raw_values = list(parsed_groups)
+        elif isinstance(parsed_groups, str):
+            raw_values = [value.strip() for value in parsed_groups.split(",")]
+        elif parsed_groups is None:
+            raw_values = []
+        else:
+            raw_values = [parsed_groups]
+
+        groups: list[int] = []
+        for value in raw_values:
+            if isinstance(value, str):
+                value = value.strip()
+            if value in {None, ""}:
+                continue
+            try:
+                groups.append(int(value))
+            except (TypeError, ValueError):
+                raise ValueError(f"Invalid GROUPS value '{value}'") from None
+
+        await self.ace_controller.update_endless_spool_groups(groups)
 
     async def _on_gcode_mmu_dryer(self, args: dict[str, str | None], delegate):
         logging.warning(f"handle mmu_dryer: {json.dumps(args)}")

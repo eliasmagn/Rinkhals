@@ -39,6 +39,12 @@ Since people have been asking, I accept donations but please remember that I wor
 </p>
 
 
+## Documentation
+
+- Start with the new [firmware overview](./docs/docs/firmware/index.md) when you need a map of the platform, partition layout, or boot flow. It links to the detailed analyses and highlights warnings before you flash anything experimental.
+- For installation specifics, see the [quick start guide](https://jbatonnet.github.io/Rinkhals/guides/rinkhals-quick-start/) and the [installation and firmware updates](https://jbatonnet.github.io/Rinkhals/Rinkhals/installation-and-firmware-updates/) reference.
+
+
 ## Rinkhals installation
 
 > [!WARNING]

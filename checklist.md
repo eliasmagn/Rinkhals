@@ -10,6 +10,7 @@
 - [x] Bridge endless spool group updates through `MMU_ENDLESS_SPOOL` so Moonraker stays in sync with ACE endless-spool setups
 - [x] Add dryer control plumbing and documentation via the new `MMU_DRYER` bridge command
 - [x] Support multiple ACE hubs when building tool/gate maps and slicer metadata
+- [x] Normalize `MMU_SELECT` arguments from UI and firmware, proxy them to `filament_hub/select_tool`, and refresh Moonraker state with tests
 
 ## Follow-up Tasks
 - [ ] Validate dual-hub and dryer flows on physical hardware (KS1 + combo)

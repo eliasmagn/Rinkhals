@@ -1,7 +1,7 @@
 # Roadmap
 
 ## Q2 2025
-- Finalize MMU Ace integration in Moonraker with dual-hub support, spool editing, endless-spool group bridging, and dryer control validation on hardware
+- Finalize MMU Ace integration in Moonraker with dual-hub support, spool editing, endless-spool and selection bridging, plus dryer control validation on hardware
 - Harden bed mesh calibration automation for KS1 and combo hardware
 - Coordinate MMU Ace status widgets with Fluidd/Mainsail maintainers
 

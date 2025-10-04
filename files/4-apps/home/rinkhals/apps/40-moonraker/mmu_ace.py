@@ -789,6 +789,53 @@ class MmuAceController:
         self._update_tool_usage()
         self._handle_status_update()
 
+    async def select_tool(self,
+                          *,
+                          tool: int | None = None,
+                          gate: int | None = None,
+                          unit: int | None = None):
+        params: Dict[str, Any] = {}
+
+        if tool is not None:
+            params["tool"] = tool
+        if gate is not None:
+            params["index"] = gate
+        if unit is not None:
+            params["id"] = unit
+
+        if not params:
+            raise ValueError("select_tool requires at least one argument")
+
+        error: Exception | None = None
+        result: Any | None = None
+        try:
+            result = await self.printer.send_request("filament_hub/select_tool", params)
+        except Exception as exc:
+            logging.error(f"Error selecting tool: {exc}")
+            result = "error"
+            error = exc
+
+        if not self._request_succeeded(result):
+            message = f"select tool failed: {result} {error}"
+            logging.warning(message)
+            raise RuntimeError(message) from error
+
+        if unit is not None:
+            self.ace.unit = unit
+            self.ace.active_filament.unit = unit
+        if gate is not None:
+            self.ace.gate = gate
+            self.ace.active_filament.gate = gate
+        if tool is not None:
+            self.ace.tool = tool
+            self.ace.active_filament.tool = tool
+
+        self.ace.active_filament.empty = "0"
+        self.ace.active_filament.status = ACTION_SELECTING
+
+        self._update_tool_usage()
+        self._handle_status_update()
+
     async def update_endless_spool_groups(self, groups: List[int]):
         params = {"groups": groups}
 
@@ -976,7 +1023,7 @@ class MmuAcePatcher:
         self.register_gcode_handler("MMU_GATE_MAP", self._on_gcode_mmu_gate_map)
         self.register_gcode_handler("MMU_TTG_MAP", self._on_gcode_mmu_ttg_map)
         self.register_gcode_handler("MMU_ENDLESS_SPOOL", self._on_gcode_mmu_endless_spool) # todo
-        self.register_gcode_handler("MMU_SELECT", self._on_gcode_mmu_unknown) # todo
+        self.register_gcode_handler("MMU_SELECT", self._on_gcode_mmu_select)
         self.register_gcode_handler("MMU_SLICER_TOOL_MAP", self._on_gcode_mmu_unknown) # todo
         self.register_gcode_handler("MMU_DRYER", self._on_gcode_mmu_dryer)
 
@@ -1002,8 +1049,58 @@ class MmuAcePatcher:
 
         return default
 
+    def _get_gcode_arg_int_opt(self, name: str, args: dict[str, str | None]) -> int | None:
+        if name not in args:
+            return None
+
+        value = args[name]
+        if value in {None, ""}:
+            return None
+
+        try:
+            return int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"MMU_SELECT {name} must be an integer") from exc
+
+    async def _on_gcode_mmu_select(self, args: dict[str, str | None], delegate):
+        logging.warning(f"handle mmu_select: {json.dumps(args)}")
+
+        tool = self._get_gcode_arg_int_opt("TOOL", args)
+        gate = self._get_gcode_arg_int_opt("GATE", args)
+        unit = self._get_gcode_arg_int_opt("UNIT", args)
+
+        if tool is None and gate is None:
+            raise ValueError("MMU_SELECT requires TOOL or GATE argument")
+
+        ace = self.ace_controller.ace
+
+        if tool is not None and tool >= 0 and gate is None:
+            if tool < len(ace.ttg_map):
+                gate = ace.ttg_map[tool]
+            elif tool < len(ace.tools):
+                mapped_gate = ace.tools[tool].gate_index
+                if mapped_gate != TOOL_GATE_UNKNOWN:
+                    gate = mapped_gate
+
+        if gate is not None and gate not in {TOOL_GATE_UNKNOWN, TOOL_GATE_BYPASS}:
+            resolved_unit, _ = self.ace_controller._resolve_gate(gate)
+            if unit is None and resolved_unit is not None:
+                unit = resolved_unit.id
+            if tool is None and gate not in {TOOL_GATE_UNKNOWN, TOOL_GATE_BYPASS}:
+                for index, mapped_gate in enumerate(ace.ttg_map):
+                    if mapped_gate == gate:
+                        tool = index
+                        break
+                else:
+                    for index, tool_status in enumerate(ace.tools):
+                        if tool_status.gate_index == gate:
+                            tool = index
+                            break
+
+        await self.ace_controller.select_tool(tool=tool, gate=gate, unit=unit)
+
     async def _on_gcode_mmu_unknown(self, args: dict[str, str | None], delegate):
-        pass
+        logging.warning(f"Unhandled MMU command with args: {json.dumps(args)}")
 
     # Triggered on ToolToGate edit in ui
     async def _on_gcode_mmu_ttg_map(self, args: dict[str, str | None], delegate):
